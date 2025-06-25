@@ -58,29 +58,15 @@ interface SyncConfig {
 }
 import configs from "../config.json" with { type: 'json' };
 
-const sync = async (config: SyncConfig) => {
-  if (firebaseConfig.apiKey === undefined) {
-    console.error('Either set $SANDBOX=1 or set $SETTLEUP_API_KEY to a production API key');
-    return;
-  }
-  if (email === undefined || password === undefined) {
-    console.error('Provide $SETTLEUP_EMAIL and $SETTLEUP_PASSWORD for authentication');
-    return;
-  }
-  if (mercuryToken === undefined) {
-    console.error('Provide a $MERCURY_TOKEN with read access to all accounts you want synced');
-    console.log(`Generate a token at ${process.env['SANDBOX'] ? 'https://sandbox.mercury.com/settings/tokens' : 'https://mercury.com/settings/tokens'}`);
-    return;
-  }
-  mercury.auth(`${mercuryToken}`);
-  const settleUpToken = await (await signInWithEmailAndPassword(settleUpAuth, email, password)).user.getIdToken();
+const sync = async (config: SyncConfig, settleUpToken: string) => {
+  const transactionsNotSeen: string[] = [];
   const settleUpMembers: Record<string, SettleUpMember> = await fetch(`${firebaseConfig.databaseURL}/members/${config.settleUpGroup}.json?auth=${settleUpToken}`, {
   })
     .then((response) => response.json())
     .catch((error) => { console.error(error); return {}; });
   if (settleUpMembers[config.settleUpPayer] === undefined) {
     console.error(`Payer ${config.settleUpPayer} is not in the Settle Up group ${config.settleUpGroup}`);
-    return;
+    return false;
   }
   if (config.settleUpSplit === undefined) {
     config.settleUpSplit = [];
@@ -116,7 +102,7 @@ const sync = async (config: SyncConfig) => {
   if (transactions === undefined || transactions.length === 0) {
     console.error(`No transactions with substring ${config.mercurySubstring} found in Mercury account ${config.mercuryAccount} in the past 6 months`);
     // more likely that there was an error than that all transactions were deleted
-    return;
+    return false;
   }
   //console.log(JSON.stringify(transactions, null, 2));
   let settleUpError: unknown = undefined;
@@ -127,7 +113,7 @@ const sync = async (config: SyncConfig) => {
     console.error(`Error fetching Settle Up transactions for group ${config.settleUpGroup}:`);
     console.error(settleUpError);
     // abort rather than risk overwriting data we couldn't retrieve
-    return;
+    return false;
   }
   //console.log(JSON.stringify(settleUpTransactions, null, 2));
   const mercuryTransactionsByID = new Map<string, MercuryTransaction>(
@@ -138,12 +124,15 @@ const sync = async (config: SyncConfig) => {
     const mercuryTransaction = mercuryTransactionsByID.get(id);
     if (mercuryTransaction === undefined) {
       //console.log(`No Mercury transaction found for id ${id}`);
+      transactionsNotSeen.push(id);
+      /*
       fetch(`${firebaseConfig.databaseURL}/transactions/${config.settleUpGroup}/${id}.json?auth=${settleUpToken}`, {
         method: 'DELETE',
       });
+      */
       return;
     }
-    if (checkMatching(transaction, mercuryTransaction, config.mercurySubstring)) {
+    if (checkMatching(transaction, mercuryTransaction, config)) {
       //console.log(`No change needed for id ${id}`);
       return;
     }
@@ -151,9 +140,12 @@ const sync = async (config: SyncConfig) => {
     const generated = generateTransaction(mercuryTransaction, config.settleUpSplit!, config.settleUpPayer, config.mercurySubstring);
     if (generated === undefined) {
       //console.log(`No Settle Up transaction should be generated for id ${id}`);
+      transactionsNotSeen.push(id);
+      /*
       fetch(`${firebaseConfig.databaseURL}/transactions/${config.settleUpGroup}/${id}.json?auth=${settleUpToken}`, {
         method: 'DELETE',
       });
+      */
       return;
     }
     newSettleUpTransactions[id] = {
@@ -184,11 +176,50 @@ const sync = async (config: SyncConfig) => {
     method: 'PATCH',
     body: JSON.stringify(newSettleUpTransactions),
   })/*.then(async (response) => console.log(JSON.stringify(await response.json(), null, 2))*/.catch((error) => console.error(error));
+
+  return [[...mercuryTransactionsByID.keys()], transactionsNotSeen] as const;
 }
 
 (async () => {
+  if (firebaseConfig.apiKey === undefined) {
+    console.error('Either set $SANDBOX=1 or set $SETTLEUP_API_KEY to a production API key');
+    return false;
+  }
+  if (email === undefined || password === undefined) {
+    console.error('Provide $SETTLEUP_EMAIL and $SETTLEUP_PASSWORD for authentication');
+    return false;
+  }
+  if (mercuryToken === undefined) {
+    console.error('Provide a $MERCURY_TOKEN with read access to all accounts you want synced');
+    console.log(`Generate a token at ${process.env['SANDBOX'] ? 'https://sandbox.mercury.com/settings/tokens' : 'https://mercury.com/settings/tokens'}`);
+    return false;
+  }
+  mercury.auth(`${mercuryToken}`);
+  const settleUpToken = await (await signInWithEmailAndPassword(settleUpAuth, email, password)).user.getIdToken();
+  const seen = new Map<string, Set<string>>();
+  const unseen = new Map<string, Set<string>>();
+  const error = new Map<string, boolean>();
   for (const config of configs) {
-    await sync(config);
+    const result = await sync(config, settleUpToken);
+    if (result) {
+      const [newSeen, newUnseen] = result;
+      seen.set(config.settleUpGroup, (seen.get(config.settleUpGroup) ?? new Set()).union(new Set(newSeen)));
+      unseen.set(config.settleUpGroup, (unseen.get(config.settleUpGroup) ?? new Set()).union(new Set(newUnseen)));
+    }
+    else {
+      error.set(config.settleUpGroup, true);
+    }
+  }
+  for (const [group, unseenTransactions] of unseen.entries()) {
+    if (error.get(group)) {
+      console.warn(`Encountered one or more errors syncing with group ${group}; not deleting any transactions from Settle Up`);
+      continue;
+    }
+    for (const id of unseenTransactions.difference(seen.get(group) ?? new Set())) {
+      await fetch(`${firebaseConfig.databaseURL}/transactions/${group}/${id}.json?auth=${settleUpToken}`, {
+        method: 'DELETE',
+      });
+    }
   }
 })();
 
@@ -261,7 +292,7 @@ const generateTransaction = (
 const checkMatching = (
   s: SettleUpTransaction,
   m: MercuryTransaction,
-  searchString: string,
+  config: SyncConfig,
 ) => {
   const amountDifference = Number.parseFloat(s.items[0].amount) + m.amount!;
   //console.log(`${s.items[0].amount} + ${m.amount} = ${amountDifference}`);
@@ -272,7 +303,8 @@ const checkMatching = (
     amountDifference < 0.01
     && amountDifference > -0.01
     && s.type === transactionTypes.get(m.kind!)
-    && s.purpose === mercuryTransactionPurpose(m, searchString)
+    && s.purpose === mercuryTransactionPurpose(m, config.mercurySubstring)
     && (m.status === 'pending' || m.status === 'sent')
+    && s.whoPaid[0].memberId === config.settleUpPayer
   );
 }
