@@ -56,7 +56,8 @@ interface SyncConfig {
   }>; // if unspecified, fetches the Settle Up group's default weights
   numDaysHistory?: number; // default is 180
 }
-import configs from "../config.json" with { type: 'json' };
+import configs_ from "../config.json" with { type: 'json' };
+const configs: SyncConfig[] = configs_;
 
 const sync = async (config: SyncConfig, settleUpToken: string) => {
   const transactionsNotSeen: string[] = [];
