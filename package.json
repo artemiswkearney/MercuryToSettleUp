@@ -1,0 +1,29 @@
+{
+  "name": "mercury-to-settleup",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "setup": "npm install && api install --lang js-cjs --identifier mercurytechnologies --yes ./mercuryAPI.json && api install --lang js-cjs --identifier mercurysandbox --yes ./mercurySandbox.json && npm run build",
+    "start": "npm run build:live",
+    "build": "tsc -p .",
+    "build:live": "nodemon --watch 'src/**/*.ts' --exec 'node --loader ts-node/esm' src/index.ts",
+    "run": "node dist/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "typescript": "5.8"
+  },
+  "dependencies": {
+    "@api/mercurysandbox": "file:.api/apis/mercurysandbox",
+    "@api/mercurytechnologies": "file:.api/apis/mercurytechnologies",
+    "firebase": "^11.9.1"
+  }
+}
