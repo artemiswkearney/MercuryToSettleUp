@@ -38,8 +38,8 @@ const firebaseConfig = {
   apiKey: process.env['SANDBOX'] ? 'AIzaSyCfMEZut1bOgu9d1NHrJiZ7ruRdzfKEHbk' : process.env['SETTLEUP_API_KEY'],
   databaseURL: process.env['SANDBOX'] ? 'https://settle-up-sandbox.firebaseio.com' : 'https://settle-up-live.firebaseio.com',
 }
-console.dir(process.env);
-console.dir(firebaseConfig);
+//console.dir(process.env);
+//console.dir(firebaseConfig);
 const app = initializeApp(firebaseConfig);
 const settleUpAuth = getAuth(app);
 
