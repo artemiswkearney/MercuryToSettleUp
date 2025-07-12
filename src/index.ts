@@ -38,6 +38,8 @@ const firebaseConfig = {
   apiKey: process.env['SANDBOX'] ? 'AIzaSyCfMEZut1bOgu9d1NHrJiZ7ruRdzfKEHbk' : process.env['SETTLEUP_API_KEY'],
   databaseURL: process.env['SANDBOX'] ? 'https://settle-up-sandbox.firebaseio.com' : 'https://settle-up-live.firebaseio.com',
 }
+console.dir(process.env);
+console.dir(firebaseConfig);
 const app = initializeApp(firebaseConfig);
 const settleUpAuth = getAuth(app);
 
@@ -87,23 +89,27 @@ const sync = async (config: SyncConfig, settleUpToken: string) => {
     start: startDate.toISOString(),
     search: config.mercurySubstring,
   } as Parameters<(typeof mercury)['transactions1']>[0];
+  let mercuryOK = true;
   let { total, transactions } = await mercury.transactions1(mercuryQuery)
     .then(response => response.data)
-    .catch((error) => { console.error(error); return undefined; })
+    .catch((error) => { console.error(error); mercuryOK = false; return undefined; })
     ?? { total: 0, transactions: [] };
   while (total === 500) {
     mercuryQuery.offset! += 500;
     const { total: nextTotal, transactions: nextTransactions } = await mercury.transactions1(mercuryQuery)
       .then(response => response.data)
-      .catch((error) => { console.error(error); return undefined; })
+      .catch((error) => { console.error(error); mercuryOK = false; return undefined; })
       ?? { total: 0, transactions: [] };
     total = nextTotal;
     transactions = transactions?.concat(nextTransactions ?? []) ?? nextTransactions;
   }
-  if (transactions === undefined || transactions.length === 0) {
-    console.error(`No transactions with substring ${config.mercurySubstring} found in Mercury account ${config.mercuryAccount} in the past 6 months`);
-    // more likely that there was an error than that all transactions were deleted
+  if (!mercuryOK) {
+    console.error(`Encountered one or more errors fetching transactions with substring ${config.mercurySubstring} from Mercury account ${config.mercuryAccount}`);
     return false;
+  }
+  if (transactions === undefined || transactions.length === 0) {
+    console.warn(`No transactions with substring ${config.mercurySubstring} found in Mercury account ${config.mercuryAccount} in the past 6 months`);
+    return [[] as string[], [] as string[]] as const;
   }
   //console.log(JSON.stringify(transactions, null, 2));
   let settleUpError: unknown = undefined;
