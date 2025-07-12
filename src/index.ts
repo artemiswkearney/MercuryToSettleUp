@@ -58,8 +58,20 @@ interface SyncConfig {
   }>; // if unspecified, fetches the Settle Up group's default weights
   numDaysHistory?: number; // default is 180
 }
-import configs_ from "../config.json" with { type: 'json' };
-const configs: SyncConfig[] = configs_;
+interface ImportedSyncConfig {
+  mercuryAccount: string;
+  mercurySubstring: string;
+  settleUpGroup: string;
+  settleUpPayer: string;
+  settleUpSplit?: Array<{
+    memberId: string,
+    weight: string,
+  }>; // if unspecified, fetches the Settle Up group's default weights
+  numDaysHistory?: number; // default is 180
+}
+import configs__ from "../config.json" with { type: 'json' };
+const configs_: ImportedSyncConfig[] = configs__;
+const configs: SyncConfig[] = configs_ as SyncConfig[];
 
 const sync = async (config: SyncConfig, settleUpToken: string) => {
   const transactionsNotSeen: string[] = [];
