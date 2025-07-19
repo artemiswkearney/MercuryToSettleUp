@@ -273,8 +273,23 @@ const transactionLabels = new Map<string, string>([
   ['other', "Payment"],
 ]);
 const mercuryTransactionPurpose = (m: MercuryTransaction, searchString: string) => (
-  (`Mercury: ${(`${m.note || ""}`.replace(searchString, '').trim() || m.externalMemo) ?? `${transactionLabels.get(m.kind!) ?? "Payment"} ${m.amount! > 0 ? 'from' : 'to'} ${m.counterpartyNickname ?? m.counterpartyName}`}`).substring(0, 128)
+  (`Mercury: ${(
+    `${m.note || ""}`.replace(searchString, '').replace(dollarAmountRegex, '').trim() || m.externalMemo)
+    ?? `${transactionLabels.get(m.kind!) ?? "Payment"} ${m.amount! > 0 ? 'from' : 'to'} ${m.counterpartyNickname ?? m.counterpartyName}`
+  }`).substring(0, 128)
 );
+
+const dollarAmountRegex = /\$(\d+(?:\.\d+)?)/;
+function parseDollarAmount(note: string): number | null {
+  const match = note.match(dollarAmountRegex)
+  
+  if (match) {
+    // match[1] contains the number part without the $
+    return parseFloat(match[1]);
+  }
+  
+  return null;
+}
 
 const generateTransaction = (
   m: MercuryTransaction,
@@ -295,7 +310,7 @@ const generateTransaction = (
     dateTime: new Date(m.createdAt!).valueOf(),
     currencyCode: 'USD', // TODO(extra): support multiple currencies / exchange rate data
     items: [{
-      amount: `${m.amount! * -1}`,
+      amount: `${(parseDollarAmount(m.note as string) ?? m.amount!) * -1}`,
       forWhom: split,
     }],
     type, 
@@ -313,7 +328,7 @@ const checkMatching = (
   m: MercuryTransaction,
   config: SyncConfig,
 ) => {
-  const amountDifference = Number.parseFloat(s.items[0].amount) + m.amount!;
+  const amountDifference = Number.parseFloat(s.items[0].amount) + (parseDollarAmount(m.note as string) ?? m.amount!);
   //console.log(`${s.items[0].amount} + ${m.amount} = ${amountDifference}`);
   //console.log(`${s.type} === ${transactionTypes.get(m.kind!)}`);
   //console.log(`${s.purpose} === ${mercuryTransactionPurpose(m, searchString)}`);
