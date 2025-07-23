@@ -279,13 +279,13 @@ const mercuryTransactionPurpose = (m: MercuryTransaction, searchString: string) 
   }`).substring(0, 128)
 );
 
-const dollarAmountRegex = /\$(\d+(?:\.\d+)?)/;
-function parseDollarAmount(note: string): number | null {
+const dollarAmountRegex = /\$(-?\d+(?:\.\d+)?)/;
+function parseDollarAmount(note: string, original: number): number | null {
   const match = note.match(dollarAmountRegex)
   
   if (match) {
     // match[1] contains the number part without the $
-    return parseFloat(match[1]);
+    return parseFloat(match[1]) * (original > 0 ? 1 : -1);
   }
   
   return null;
@@ -310,7 +310,7 @@ const generateTransaction = (
     dateTime: new Date(m.createdAt!).valueOf(),
     currencyCode: 'USD', // TODO(extra): support multiple currencies / exchange rate data
     items: [{
-      amount: `${(parseDollarAmount(m.note as string) ?? m.amount!) * -1}`,
+      amount: `${(parseDollarAmount(m.note as string, m.amount!) ?? m.amount!) * -1}`,
       forWhom: split,
     }],
     type, 
@@ -328,7 +328,7 @@ const checkMatching = (
   m: MercuryTransaction,
   config: SyncConfig,
 ) => {
-  const amountDifference = Number.parseFloat(s.items[0].amount) + (parseDollarAmount(m.note as string) ?? m.amount!);
+  const amountDifference = Number.parseFloat(s.items[0].amount) + (parseDollarAmount(m.note as string, m.amount!) ?? m.amount!);
   //console.log(`${s.items[0].amount} + ${m.amount} = ${amountDifference}`);
   //console.log(`${s.type} === ${transactionTypes.get(m.kind!)}`);
   //console.log(`${s.purpose} === ${mercuryTransactionPurpose(m, searchString)}`);
