@@ -73,6 +73,108 @@ import configs__ from "../config.json" with { type: 'json' };
 const configs_: ImportedSyncConfig[] = configs__;
 const configs: SyncConfig[] = configs_ as SyncConfig[];
 
+interface MassResplitConfig {
+  settleUpGroup: string;
+  startDate: string;
+  endDate: string;
+  splitToMatch: Array<{
+    memberId: string,
+    weight: NumStr,
+  }>;
+  newSplit: Array<{
+    memberId: string,
+    weight: NumStr,
+  }>;
+}
+interface ImportedMassResplitConfig {
+  settleUpGroup: string;
+  startDate: string;
+  endDate: string;
+  splitToMatch: Array<{
+    memberId: string,
+    weight: string,
+  }>;
+  newSplit: Array<{
+    memberId: string,
+    weight: string,
+  }>;
+}
+import resplits__ from "../resplits.json" with { type: 'json' };
+const resplits_: ImportedMassResplitConfig[] = resplits__;
+const resplits: MassResplitConfig[] = resplits_ as MassResplitConfig[];
+
+const createTemplate = async (settleUpGroup: string, settleUpToken: string) => {
+  const settleUpMembers: Record<string, SettleUpMember> = await fetch(`${firebaseConfig.databaseURL}/members/${config.settleUpGroup}.json?auth=${settleUpToken}`, {
+  })
+    .then((response) => response.json())
+    .catch((error) => { console.error(error); return {}; });
+  const [first, last] = await Promise.all([
+    fetch(`${firebaseConfig.databaseURL}/transactions/${settleUpGroup}.json?auth=${settleUpToken}&orderBy="dateTime"&limitToFirst=1`, {})
+      .then((response) => response.json() as Promise<Record<string, SettleUpTransaction>>),
+    fetch(`${firebaseConfig.databaseURL}/transactions/${settleUpGroup}.json?auth=${settleUpToken}&orderBy="dateTime"&limitToLast=1`, {})
+      .then((response) => response.json() as Promise<Record<string, SettleUpTransaction>>),
+  ]);
+  const firstDate = new Date(Object.entries(first)[0][1].dateTime);
+  const lastDate = new Date(Object.entries(last)[0][1].dateTime);
+  const defaultSplit = [];
+  for (const [id, member] of Object.entries(settleUpMembers)) {
+    if (member.active) {
+      defaultSplit.push({ memberId: id, weight: member.defaultWeight });
+    }
+  }
+  const resplitTemplate: MassResplitConfig = {
+    settleUpGroup: config.settleUpGroup,
+    startDate: firstDate.toISOString(),
+    endDate: lastDate.toISOString(),
+    splitToMatch: defaultSplit,
+    newSplit: defaultSplit,
+  };
+}
+const syncResplit = async (config: MassResplitConfig, settleUpToken: string) => {
+  const startDate = new Date(config.startDate);
+  const endDate = new Date(config.endDate);
+  const settleUpTransactions = await fetch(`${firebaseConfig.databaseURL}/transactions/${config.settleUpGroup}.json?auth=${settleUpToken}&orderBy="dateTime"&startAt=${startDate.valueOf()}&endAt=${endDate.valueOf()}`, {
+  }).then((response) => response.json() as Promise<Record<string, SettleUpTransaction>>)
+    .catch((error) => { console.error(error); settleUpError = error; return {} as Record<string, SettleUpTransaction>; });
+  let settleUpError: unknown = undefined;
+  if (settleUpError) {
+    console.error(`Error fetching Settle Up transactions for group ${config.settleUpGroup}:`);
+    console.error(settleUpError);
+    // we can't edit transactions we don't have
+    return {};
+  }
+  const toMatchMap = new Map(config.splitToMatch
+    .map((split) => [split.memberId, Number.parseFloat(split.weight)] as const)
+    .filter(([id, weight]) => weight > 0)
+  );
+  const oldTransactions: Record<string, SettleUpTransaction> = {};
+  const newSettleUpTransactions: Record<string, SettleUpTransaction> = {};
+  Object.entries(settleUpTransactions).forEach(([id, transaction]) => {
+    //TODO maybe someday support multi-item transactions better
+    const transactionPayersMap = new Map(transaction.items[0].forWhom
+      .map((split) => [split.memberId, Number.parseFloat(split.weight)] as const)
+      .filter(([id, weight]) => weight > 0)
+    );
+    if (transactionPayersMap.size !== toMatchMap.size) return;
+    for (const [id, weight] of toMatchMap) {
+      const transactionWeight = transactionPayersMap.get(id);
+      if (transactionWeight === undefined) return;
+      if (Math.abs(transactionWeight - weight) > 0.01) return;
+    }
+    oldTransactions[id] = transaction;
+    newSettleUpTransactions[id] = transaction;
+    newSettleUpTransactions[id].items = transaction.items.map((item) => ({
+      ...item,
+      forWhom: config.newSplit,
+    })) as SettleUpTransaction['items'];
+  });
+  if (Object.entries(newSettleUpTransactions).length === 0) return {};
+  await fetch(`${firebaseConfig.databaseURL}/transactions/${config.settleUpGroup}.json?auth=${settleUpToken}`, {
+    method: 'PATCH',
+    body: JSON.stringify(newSettleUpTransactions),
+  })/*.then(async (response) => console.log(JSON.stringify(await response.json(), null, 2))*/.catch((error) => console.error(error));
+  return oldTransactions;
+}
 const sync = async (config: SyncConfig, settleUpToken: string) => {
   const transactionsNotSeen: string[] = [];
   const settleUpMembers: Record<string, SettleUpMember> = await fetch(`${firebaseConfig.databaseURL}/members/${config.settleUpGroup}.json?auth=${settleUpToken}`, {
@@ -208,13 +310,24 @@ const sync = async (config: SyncConfig, settleUpToken: string) => {
     console.error('Provide $SETTLEUP_EMAIL and $SETTLEUP_PASSWORD for authentication');
     return false;
   }
-  if (mercuryToken === undefined) {
-    console.error('Provide a $MERCURY_TOKEN with read access to all accounts you want synced');
-    console.log(`Generate a token at ${process.env['SANDBOX'] ? 'https://sandbox.mercury.com/settings/tokens' : 'https://mercury.com/settings/tokens'}`);
-    return false;
+  if (configs.length > 0) {
+    if (mercuryToken === undefined) {
+      console.error('Provide a $MERCURY_TOKEN with read access to all accounts you want synced');
+      console.log(`Generate a token at ${process.env['SANDBOX'] ? 'https://sandbox.mercury.com/settings/tokens' : 'https://mercury.com/settings/tokens'}`);
+      return false;
+    }
+    mercury.auth(`${mercuryToken}`);
   }
-  mercury.auth(`${mercuryToken}`);
   const settleUpToken = await (await signInWithEmailAndPassword(settleUpAuth, email, password)).user.getIdToken();
+  if (process.argv[2] === 'createTemplate') {
+    const group = process.argv[3] || configs[0]?.settleUpGroup;
+    if (group === undefined) {
+      console.error(`To generate a template, either provide a group ID as a second argument, or add at least one sync config to config.json`);
+      return false;
+    }
+    createTemplate(group, settleUpToken);
+    return;
+  }
   const seen = new Map<string, Set<string>>();
   const unseen = new Map<string, Set<string>>();
   const error = new Map<string, boolean>();
@@ -240,6 +353,16 @@ const sync = async (config: SyncConfig, settleUpToken: string) => {
       });
     }
   }
+  //console.log(JSON.stringify(resplits, null, 2));
+  let oldTransactions: Record<string, SettleUpTransaction> = {};
+  for (const config of resplits) {
+    const result = await syncResplit(config, settleUpToken);
+    oldTransactions = {
+      ...result,
+      ...oldTransactions,
+    };
+  }
+  //console.log(JSON.stringify(oldTransactions, null, 2));
 })();
 
 const transactionTypes = new Map<string, 'expense' | 'transfer' | undefined>([
