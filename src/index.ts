@@ -104,7 +104,7 @@ const resplits_: ImportedMassResplitConfig[] = resplits__;
 const resplits: MassResplitConfig[] = resplits_ as MassResplitConfig[];
 
 const createTemplate = async (settleUpGroup: string, settleUpToken: string) => {
-  const settleUpMembers: Record<string, SettleUpMember> = await fetch(`${firebaseConfig.databaseURL}/members/${config.settleUpGroup}.json?auth=${settleUpToken}`, {
+  const settleUpMembers: Record<string, SettleUpMember> = await fetch(`${firebaseConfig.databaseURL}/members/${settleUpGroup}.json?auth=${settleUpToken}`, {
   })
     .then((response) => response.json())
     .catch((error) => { console.error(error); return {}; });
@@ -123,12 +123,13 @@ const createTemplate = async (settleUpGroup: string, settleUpToken: string) => {
     }
   }
   const resplitTemplate: MassResplitConfig = {
-    settleUpGroup: config.settleUpGroup,
+    settleUpGroup: settleUpGroup,
     startDate: firstDate.toISOString(),
     endDate: lastDate.toISOString(),
     splitToMatch: defaultSplit,
     newSplit: defaultSplit,
   };
+  console.log(JSON.stringify(resplitTemplate, null, 2));
 }
 const syncResplit = async (config: MassResplitConfig, settleUpToken: string) => {
   const startDate = new Date(config.startDate);
